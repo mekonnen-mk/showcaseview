@@ -257,3 +257,18 @@ enum ShowcaseProgressType {
   /// Indicates that the showcase is moving backward to the previous item.
   backward,
 }
+
+/// Defines the direction from which an element will slide into view.
+enum SlideDirection {
+  /// Slides the element from the top.
+  fromTop,
+
+  /// Slides the element from the bottom.
+  fromBottom,
+
+  /// Slides the element from the left.
+  fromLeft,
+
+  /// Slides the element from the right.
+  fromRight,
+}

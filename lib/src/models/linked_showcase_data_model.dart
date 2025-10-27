@@ -37,6 +37,20 @@ class LinkedShowcaseDataModel {
   final BorderRadius? radius;
   final bool isCircle;
 
+  LinkedShowcaseDataModel copyWith({
+    Rect? rect,
+    EdgeInsets? overlayPadding,
+    BorderRadius? radius,
+    bool? isCircle,
+  }) {
+    return LinkedShowcaseDataModel(
+      rect: rect ?? this.rect,
+      overlayPadding: overlayPadding ?? this.overlayPadding,
+      radius: radius ?? this.radius,
+      isCircle: isCircle ?? this.isCircle,
+    );
+  }
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||

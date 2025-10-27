@@ -97,6 +97,13 @@ class Showcase extends StatefulWidget {
     this.scaleAnimationDuration = const Duration(milliseconds: 300),
     this.scaleAnimationCurve = Curves.easeIn,
     this.scaleAnimationAlignment,
+    this.targetScaleAnimationDuration,
+    this.targetScaleAnimationCurve,
+    this.targetFadeAnimationDuration,
+    this.targetFadeAnimationCurve,
+    this.targetSlideAnimationDuration,
+    this.targetSlideAnimationCurve,
+    this.targetSlideAnimationDirection,
     this.tooltipPosition,
     this.titlePadding,
     this.descriptionPadding,
@@ -201,6 +208,13 @@ class Showcase extends StatefulWidget {
     this.enableAutoScroll,
     this.toolTipMargin = 14,
     this.targetTooltipGap = 10,
+    this.targetScaleAnimationDuration,
+    this.targetScaleAnimationCurve,
+    this.targetFadeAnimationDuration,
+    this.targetFadeAnimationCurve,
+    this.targetSlideAnimationDuration,
+    this.targetSlideAnimationCurve,
+    this.targetSlideAnimationDirection,
   })  : showArrow = false,
         onToolTipClick = null,
         scaleAnimationDuration = const Duration(milliseconds: 300),
@@ -422,6 +436,41 @@ class Showcase extends StatefulWidget {
   ///
   /// Defaults to Curves.easeIn
   final Curve scaleAnimationCurve;
+
+  /// The duration for the scale animation of the clear target area.
+  ///
+  /// If null, defaults to 300 ms.
+  final Duration? targetScaleAnimationDuration;
+
+  /// The curve to be used for the scale animation of the clear target area.
+  ///
+  /// If null, defaults to Curves.easeIn.
+  final Curve? targetScaleAnimationCurve;
+
+  /// The duration of the fade-in animation for the clear target area.
+  ///
+  /// If null, the fade animation will be disabled.
+  final Duration? targetFadeAnimationDuration;
+
+  /// The curve to be used for the fade-in animation of the clear target area.
+  ///
+  /// Defaults to Curves.easeIn.
+  final Curve? targetFadeAnimationCurve;
+
+  /// The duration of the slide animation for the clear target area.
+  ///
+  /// If null, the slide animation will be disabled.
+  final Duration? targetSlideAnimationDuration;
+
+  /// The curve to be used for the slide animation of the clear target area.
+  ///
+  /// Defaults to Curves.easeIn.
+  final Curve? targetSlideAnimationCurve;
+
+  /// The direction from which the clear target area will slide into view.
+  ///
+  /// If null, the slide animation will be disabled.
+  final SlideDirection? targetSlideAnimationDirection;
 
   /// An alignment to origin of initial tooltip animation.
   ///

@@ -25,7 +25,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../models/linked_showcase_data_model.dart';
-import '../showcase/showcase.dart';
 import '../showcase/showcase_controller.dart';
 import '../showcase/showcase_service.dart';
 import '../showcase/showcase_view.dart';
@@ -57,11 +56,39 @@ class OverlayManager {
   /// Flag to determine if overlay should be shown
   var _shouldShow = false;
 
+  /// Flag to determine if we're dismissing with animation
+  var _isDismissing = false;
+
+  /// Flag to track if this is the first showcase in the sequence
+  var _isInitialShowcaseInSequence = true;
+
+  /// Callback to notify when target animation completes
+  VoidCallback? _onTargetAnimationComplete;
+
   /// The current showcase scope identifier
   String get _currentScope => ShowcaseService.instance.currentScope;
 
   /// Returns whether an overlay is currently being displayed
   bool get _isShowing => _overlayEntry != null;
+
+  /// Returns whether this is the first showcase in the current sequence
+  ///
+  /// This is used by controllers to determine if they should disable animations
+  /// during transitions between showcase steps.
+  bool get isInitialShowcaseInSequence => _isInitialShowcaseInSequence;
+
+  /// Registers a callback to be notified when the target animation completes
+  ///
+  /// This is used by tooltips to delay their appearance until after the
+  /// target morph animation finishes.
+  void registerTargetAnimationCallback(VoidCallback callback) {
+    _onTargetAnimationComplete = callback;
+  }
+
+  /// Clears the target animation completion callback
+  void clearTargetAnimationCallback() {
+    _onTargetAnimationComplete = null;
+  }
 
   /// Updates the overlay visibility based on the provided showcase view.
   ///
@@ -96,9 +123,9 @@ class OverlayManager {
   /// scope.
   ///
   /// * [scope] - The scope to dispose overlays for
-  void dispose({required String scope}) {
+  Future<void> dispose({required String scope}) async {
     if (!_isShowing || _currentScope != scope) return;
-    _hide();
+    await _hideWithAnimation();
   }
 
   /// Shows the overlay using the provided builder.
@@ -107,19 +134,46 @@ class OverlayManager {
   /// existing one.
   void _show(WidgetBuilder overlayBuilder) {
     if (_overlayEntry != null) {
-      // Rebuild overlay.
+      // Rebuild overlay - not the initial showcase anymore
+      _isInitialShowcaseInSequence = false;
       _rebuild();
       return;
     }
-    // Create the overlay.
+    // Create the overlay - this is the initial showcase
+    _isInitialShowcaseInSequence = true;
     _overlayEntry = OverlayEntry(builder: overlayBuilder);
     overlayState?.insert(_overlayEntry!);
   }
 
-  /// Removes and clears the current overlay entry.
+  /// Removes and clears the current overlay entry immediately.
   void _hide() {
     _overlayEntry?.remove();
     _overlayEntry = null;
+    // Reset the flag for next showcase sequence
+    _isInitialShowcaseInSequence = true;
+  }
+
+  /// Removes the overlay with fade-out animation.
+  Future<void> _hideWithAnimation() async {
+    if (_overlayEntry == null) return;
+
+    // Trigger fade-out animation in the overlay widget
+    final context = _overlayEntry!.mounted ? _overlayEntry : null;
+    if (context != null) {
+      // Get the state and trigger fade-out
+      await _triggerFadeOut();
+    }
+
+    _hide();
+  }
+
+  /// Triggers the fade-out animation by notifying the overlay state.
+  Future<void> _triggerFadeOut() async {
+    _isDismissing = true;
+    _rebuild();
+    // Wait for the fade-out animation to complete (500ms duration)
+    await Future<void>.delayed(const Duration(milliseconds: 425)); // 500 * 0.85
+    _isDismissing = false;
   }
 
   /// Synchronizes the overlay visibility with the showcase manager state.
@@ -127,7 +181,8 @@ class OverlayManager {
   /// Shows or hides the overlay based on the [_shouldShow] flag.
   void _sync() {
     if (_isShowing && !_shouldShow) {
-      _hide();
+      // Hide with fade-out animation
+      _hideWithAnimation();
     } else if (!_isShowing && _shouldShow) {
       _show(_getBuilder);
     } else {
@@ -155,17 +210,125 @@ class OverlayManager {
 
     if (controllers.isEmpty) return const SizedBox.shrink();
 
-    final currentShowcaseKey = showcaseView.getActiveShowcaseKey;
+    return _ShowcaseOverlay(
+      key: ValueKey(showcaseView.getActiveShowcaseKey),
+      controllers: controllers,
+      isDismissing: _isDismissing,
+      isInitialShowcase: _isInitialShowcaseInSequence,
+    );
+  }
 
-    late final ShowcaseController firstController;
-    late final Showcase firstShowcaseConfig;
-    final controllerLength = controllers.length;
-    for (var i = 0; i < controllerLength; i++) {
-      final controller = controllers[i];
-      if (i == 0) {
-        firstController = controller;
-        firstShowcaseConfig = firstController.config;
-      }
+  /// Forces the overlay entry to rebuild
+  void _rebuild() => _overlayEntry?.markNeedsBuild();
+}
+
+/// A private stateful widget that manages the animation and rendering of the
+/// showcase overlay, including the animated "clear section".
+class _ShowcaseOverlay extends StatefulWidget {
+  const _ShowcaseOverlay({
+    super.key,
+    required this.controllers,
+    this.isDismissing = false,
+    this.isInitialShowcase = true,
+  });
+
+  final List<ShowcaseController> controllers;
+  final bool isDismissing;
+  final bool isInitialShowcase;
+
+  @override
+  State<_ShowcaseOverlay> createState() => _ShowcaseOverlayState();
+}
+
+class _ShowcaseOverlayState extends State<_ShowcaseOverlay>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late ShowcaseController _firstController;
+
+  /// Stores the previous targets' data for morphing animation
+  List<LinkedShowcaseDataModel>? _previousTargetsData;
+
+  @override
+  void initState() {
+    super.initState();
+    _firstController = widget.controllers.first;
+    _animationController = AnimationController(
+      vsync: this,
+      duration: _getAnimationDuration(),
+    );
+    _animationController.addStatusListener(_onAnimationStatusChanged);
+    _animationController.addListener(_onAnimationProgress);
+    _animationController.forward();
+  }
+
+  /// Tracks animation progress to trigger tooltip before target completes
+  bool _hasTriggeredTooltip = false;
+
+  void _onAnimationProgress() {
+    // Trigger tooltip at 90% (450ms of 500ms) to give it a head start
+    if (!_hasTriggeredTooltip &&
+        _animationController.value >= 0.9 &&
+        !widget.isDismissing &&
+        widget.isInitialShowcase) {
+      _hasTriggeredTooltip = true;
+      OverlayManager.instance._onTargetAnimationComplete?.call();
+    }
+  }
+
+  /// Handles animation status changes to notify when target animation completes
+  void _onAnimationStatusChanged(AnimationStatus status) {
+    // Reset flag when animation completes or is reset
+    if (status == AnimationStatus.completed ||
+        status == AnimationStatus.dismissed) {
+      _hasTriggeredTooltip = false;
+    }
+  }
+
+  @override
+  void didUpdateWidget(_ShowcaseOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // Handle dismissing animation
+    if (!oldWidget.isDismissing && widget.isDismissing) {
+      _animationController.reverse();
+      return;
+    }
+
+    if (oldWidget.controllers.first != widget.controllers.first) {
+      _previousTargetsData = _getCurrentTargetsData(oldWidget.controllers);
+      _firstController = widget.controllers.first;
+      _animationController
+        ..duration = _getAnimationDuration()
+        ..forward(from: 0.0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _animationController.removeStatusListener(_onAnimationStatusChanged);
+    _animationController.removeListener(_onAnimationProgress);
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  Duration _getAnimationDuration() {
+    // Use longer duration for transitions to make morphing more graceful
+    // Initial showcase: 500ms, Transitions: 700ms
+    return widget.isInitialShowcase
+        ? const Duration(milliseconds: 500)
+        : const Duration(milliseconds: 700);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showcaseView = ShowcaseView.getNamed(
+      ShowcaseService.instance.currentScope,
+    );
+    final currentShowcaseKey = showcaseView.getActiveShowcaseKey;
+    final firstShowcaseConfig = _firstController.config;
+
+    // Update controller data BEFORE we get animated data
+    for (final controller in widget.controllers) {
       if (controller.key == currentShowcaseKey) {
         controller.updateControllerData();
       }
@@ -177,33 +340,57 @@ class OverlayManager {
       child: const Align(),
     );
 
-    final overlayChild = Stack(
-      // This key is used to force rebuild the overlay when needed.
-      // this key enables `_overlayEntry?.markNeedsBuild();` to detect that
-      // output of the builder has changed.
-      key: ValueKey(firstShowcaseConfig.hashCode),
-      children: [
-        GestureDetector(
-          onTap: firstController.handleBarrierTap,
-          child: ClipPath(
-            clipper: ShapeClipper(
-              linkedObjectData: _getLinkedShowcasesData(controllers),
-            ),
-            child: ImageFiltered(
-              enabled: firstController.blur > 0.2,
-              imageFilter: ImageFilter.blur(
-                sigmaX: firstController.blur,
-                sigmaY: firstController.blur,
+    final overlayChild = AnimatedBuilder(
+      animation: _animationController,
+      builder: (context, child) {
+        final animatedData =
+            _getAnimatedLinkedShowcasesData(context, widget.controllers);
+
+        final backgroundFadeAnimation = CurvedAnimation(
+          parent: _animationController,
+          curve: const Interval(0.0, 0.85, curve: Curves.easeIn),
+        );
+
+        final backgroundWidget = RepaintBoundary(
+          child: GestureDetector(
+            onTap: _firstController.handleBarrierTap,
+            child: ClipPath(
+              clipper: ShapeClipper(
+                linkedObjectData: animatedData,
               ),
-              child: backgroundContainer,
+              child: ImageFiltered(
+                enabled: _firstController.blur > 0.2,
+                imageFilter: ImageFilter.blur(
+                  sigmaX: _firstController.blur,
+                  sigmaY: _firstController.blur,
+                ),
+                child: backgroundContainer,
+              ),
             ),
           ),
-        ),
-        ...controllers.expand((object) => object.tooltipWidgets),
-      ],
+        );
+
+        return Stack(
+          // This key is used to force rebuild the overlay when needed.
+          // this key enables `_overlayEntry?.markNeedsBuild();` to detect that
+          // output of the builder has changed.
+          key: ValueKey(firstShowcaseConfig.hashCode),
+          children: [
+            // Fade in on initial showcase, and fade out when dismissing
+            if (widget.isInitialShowcase || widget.isDismissing)
+              FadeTransition(
+                opacity: backgroundFadeAnimation,
+                child: backgroundWidget,
+              )
+            else
+              backgroundWidget,
+            ...widget.controllers.expand((object) => object.tooltipWidgets),
+          ],
+        );
+      },
     );
 
-    final inheritedData = firstController.inheritedData;
+    final inheritedData = _firstController.inheritedData;
 
     // Wrap the child with captured themes to maintain the original context's
     // theme. Captured themes are used as to cover cases where there are
@@ -224,19 +411,66 @@ class OverlayManager {
     );
   }
 
-  /// Extracts and returns linked showcase data from controllers.
-  ///
-  /// Filters out null data and collects valid linked showcase information.
-  List<LinkedShowcaseDataModel> _getLinkedShowcasesData(
+  /// Extracts and returns animated linked showcase data from controllers.
+  List<LinkedShowcaseDataModel> _getAnimatedLinkedShowcasesData(
+    BuildContext context,
     List<ShowcaseController> controllers,
   ) {
     final controllerLength = controllers.length;
-    return [
-      for (var i = 0; i < controllerLength; i++)
-        if (controllers[i].linkedShowcaseDataModel case final model?) model,
-    ];
+    final data = <LinkedShowcaseDataModel>[];
+
+    final morphAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: const Interval(0.15, 1.0, curve: Curves.fastOutSlowIn),
+    );
+
+    for (var i = 0; i < controllerLength; i++) {
+      final model = controllers[i].linkedShowcaseDataModel;
+      if (model != null) {
+        final endRect = model.rect;
+        final endRadius = model.radius;
+
+        // Get previous model for morphing from previous position
+        final previousModel =
+            (_previousTargetsData != null && i < _previousTargetsData!.length)
+                ? _previousTargetsData![i]
+                : null;
+
+        final beginRect = previousModel?.rect ?? endRect;
+
+        final beginRadius = previousModel?.radius;
+
+        final animatedRect = RectTween(
+          begin: beginRect,
+          end: endRect,
+        ).evaluate(morphAnimation);
+
+        final animatedRadius = BorderRadiusTween(
+          begin: beginRadius,
+          end: endRadius,
+        ).evaluate(morphAnimation);
+
+        data.add(
+          model.copyWith(
+            rect: controllers[i].isScrollRunning ? Rect.zero : animatedRect,
+            radius: animatedRadius,
+          ),
+        );
+      }
+    }
+    return data;
   }
 
-  /// Forces the overlay entry to rebuild
-  void _rebuild() => _overlayEntry?.markNeedsBuild();
+  /// Extracts current targets data from controllers.
+  List<LinkedShowcaseDataModel> _getCurrentTargetsData(
+    List<ShowcaseController> controllers,
+  ) {
+    final data = <LinkedShowcaseDataModel>[];
+    for (final controller in controllers) {
+      if (controller.linkedShowcaseDataModel case final model?) {
+        data.add(model);
+      }
+    }
+    return data;
+  }
 }

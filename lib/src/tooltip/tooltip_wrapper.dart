@@ -72,6 +72,7 @@ class ToolTipWrapper extends StatefulWidget {
     this.descriptionPadding,
     this.titleTextDirection,
     this.descriptionTextDirection,
+    this.onTargetAnimationComplete,
     super.key,
   });
 
@@ -108,6 +109,7 @@ class ToolTipWrapper extends StatefulWidget {
   final EdgeInsets targetPadding;
   final ShowcaseController showcaseController;
   final double targetTooltipGap;
+  final VoidCallback? onTargetAnimationComplete;
 
   @override
   State<ToolTipWrapper> createState() => _ToolTipWrapperState();
@@ -137,9 +139,25 @@ class _ToolTipWrapperState extends State<ToolTipWrapper>
     curve: widget.scaleAnimationCurve,
   );
 
+  bool _hasStartedAnimation = false;
+
   @override
   void initState() {
     super.initState();
+
+    // Always start animations immediately for now
+    // TODO: Re-implement delayed start after target animation
+    _startAnimations();
+
+    widget.showcaseController.reverseAnimationCallback =
+        widget.disableScaleAnimation ? null : _scaleAnimationController.reverse;
+  }
+
+  /// Starts the tooltip animations after target animation completes
+  void _startAnimations() {
+    if (_hasStartedAnimation || !mounted) return;
+    _hasStartedAnimation = true;
+
     if (widget.disableScaleAnimation) {
       movingAnimationListener();
     } else {
@@ -151,8 +169,6 @@ class _ToolTipWrapperState extends State<ToolTipWrapper>
         ..forward();
     }
     if (!widget.disableMovingAnimation) _movingAnimationController.forward();
-    widget.showcaseController.reverseAnimationCallback =
-        widget.disableScaleAnimation ? null : _scaleAnimationController.reverse;
   }
 
   @override
